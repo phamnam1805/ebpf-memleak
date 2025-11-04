@@ -1,6 +1,6 @@
 module ebpf-memleak
 
-go 1.25.3
+go 1.25.1
 
 require (
 	github.com/cilium/ebpf v0.20.0
