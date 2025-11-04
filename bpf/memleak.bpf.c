@@ -60,8 +60,10 @@ static void update_statistics_add(u64 stack_id, u64 sz)
 		return;
 
 	const union combined_alloc_info incremental_cinfo = {
-		.total_size = sz,
-		.number_of_allocs = 1
+		.info = {
+            .total_size = sz,
+		    .number_of_allocs = 1
+        }
 	};
 
 	__sync_fetch_and_add(&existing_cinfo->bits, incremental_cinfo.bits);
@@ -79,8 +81,10 @@ static void update_statistics_del(u64 stack_id, u64 sz)
 	}
 
 	const union combined_alloc_info decremental_cinfo = {
-		.total_size = sz,
-		.number_of_allocs = 1
+		.info = {
+            .total_size = sz,
+		    .number_of_allocs = 1
+        }
 	};
 
 	__sync_fetch_and_sub(&existing_cinfo->bits, decremental_cinfo.bits);
