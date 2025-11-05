@@ -2,6 +2,7 @@ package probe
 
 import (
 	"bufio"
+	"container/heap"
 	"context"
 	"fmt"
 	"log"
@@ -22,6 +23,24 @@ import (
 const tenMegaBytes = 1024 * 1024 * 10
 const twentyMegaBytes = tenMegaBytes * 2
 const fortyMegaBytes = twentyMegaBytes * 2
+
+type MinHeap []*info.CombinedAllocInfo
+
+func (h MinHeap) Len() int           { return len(h) }
+func (h MinHeap) Less(i, j int) bool { return h[i].TotalSize < h[j].TotalSize } // min-heap
+func (h MinHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *MinHeap) Push(x any) {
+	*h = append(*h, x.(*info.CombinedAllocInfo))
+}
+
+func (h *MinHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
 
 type probe struct {
 	bpfObjects *probeObjects
@@ -298,7 +317,7 @@ func (p *probe) Close() error {
 	return nil
 }
 
-func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize uint64, sampleRate uint64, traceAll bool, stackFlags uint64, waMissingFree bool) error {
+func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize uint64, sampleRate uint64, traceAll bool, stackFlags uint64, waMissingFree bool, nTopStacks int) error {
 	probe, err := newProbe(pid, minSize, maxSize, pageSize, sampleRate, traceAll, stackFlags, waMissingFree)
 	if err != nil {
 		log.Printf("Failed creating new probe: %v", err)
@@ -315,6 +334,9 @@ func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize 
 			fmt.Println("=== Reading combined allocs map entries ===")
 			iter := combinedAllocsMap.Iterate()
 
+			h := &MinHeap{}
+			heap.Init(h)
+
 			var key uint64
 			var val info.CombinedAllocInfoRaw
 
@@ -324,8 +346,24 @@ func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize 
 					log.Printf("Failed to unmarshal combined alloc info: %v", err)
 					continue
 				}
-				fmt.Printf("stackId=%-16x total_size=%d number_of_allocs=%d\n", key, combinedInfo.TotalSize, combinedInfo.NumberOfAllocs)
+				if h.Len() < nTopStacks {
+					heap.Push(h, combinedInfo)
+				} else if combinedInfo.TotalSize > (*h)[0].TotalSize {
+					heap.Pop(h)
+					heap.Push(h, combinedInfo)
+				}
 			}
+
+			topStacks := make([]*info.CombinedAllocInfo, h.Len())
+			for i := len(topStacks) - 1; i >= 0; i-- {
+				topStacks[i] = heap.Pop(h).(*info.CombinedAllocInfo)
+			}
+
+			fmt.Printf("[%s] Top %d stacks with outstanding allocations:\n", time.Now().Format(time.RFC3339), len(topStacks))
+			for _, stackInfo := range topStacks {
+				fmt.Printf("%d Bytes in %d allocations from stack\n", stackInfo.TotalSize, stackInfo.NumberOfAllocs)
+			}
+
 			if err := iter.Err(); err != nil {
 				log.Printf("Iterator error: %v", err)
 			}
