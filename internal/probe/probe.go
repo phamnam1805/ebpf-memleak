@@ -1,13 +1,20 @@
 package probe
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"log"
+	"os"
+	"strings"
+	"time"
 
-	"github.com/cilium/ebpf"
+	// "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 	"golang.org/x/sys/unix"
+
+	"ebpf-memleak/internal/info"
 )
 
 //go:generate env GOPACKAGE=probe go run github.com/cilium/ebpf/cmd/bpf2go probe ../../bpf/memleak.bpf.c -- -O2 -target x86_64-unknown-linux-gnu -D__TARGET_ARCH_x86
@@ -17,8 +24,8 @@ const twentyMegaBytes = tenMegaBytes * 2
 const fortyMegaBytes = twentyMegaBytes * 2
 
 type probe struct {
-	bpfObjects 	*probeObjects
-	links 		[]link.Link
+	bpfObjects *probeObjects
+	links      []link.Link
 }
 
 func setRlimit() error {
@@ -129,27 +136,62 @@ func (p *probe) loadObjects(minSize uint64, maxSize uint64, pageSize uint64, sam
 		log.Printf("Enabled wa_missing_free")
 	}
 
-	if err := spec.LoadAndAssign(&objs, &ebpf.CollectionOptions{
-		Maps: ebpf.MapOptions{
-			PinPath: "/sys/fs/bpf",
-		},
-	}); err != nil {
+	if err := spec.LoadAndAssign(&objs, nil); err != nil {
 		log.Printf("Failed loading probe objects: %v", err)
 		return err
 	}
+	// if err := spec.LoadAndAssign(&objs, &ebpf.CollectionOptions{
+	// 	Maps: ebpf.MapOptions{
+	// 		PinPath: "/sys/fs/bpf",
+	// 	},
+	// }); err != nil {
+	// 	log.Printf("Failed loading probe objects: %v", err)
+	// 	return err
+	// }
 
 	p.bpfObjects = &objs
 
 	return nil
 }
 
+func getLibcPath(pid int) (string, error) {
+	mapsFile := fmt.Sprintf("/proc/%d/maps", pid)
+	f, err := os.Open(mapsFile)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "/libc-") || strings.Contains(line, "/libc.so") {
+			// Extract the path
+			fields := strings.Fields(line)
+			if len(fields) >= 6 {
+				path := fields[len(fields)-1]
+				// Return the first occurrence
+				return path, nil
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("failed to read /proc/%d/maps: %w", pid, err)
+	}
+
+	return "", fmt.Errorf("failed to read /proc/%d/maps: %w", pid, err)
+}
+
 func (p *probe) attachPrograms(pid int) error {
 	log.Printf("Attaching bpf programs to kernel")
 
-	libcPath := "/lib/x86_64-linux-gnu/libc.so.6"
+	libcPath, err := getLibcPath(pid)
+	if err != nil {
+		return fmt.Errorf("Failed to get libc path: %v", err)
+	}
 	executable, err := link.OpenExecutable(libcPath)
 	if err != nil {
-		log.Fatalf("Failed to open libc: %v", err)
+		return fmt.Errorf("Failed to open libc: %v", err)
 	}
 
 	p.links = make([]link.Link, 35)
@@ -161,67 +203,84 @@ func (p *probe) attachPrograms(pid int) error {
 	if err != nil {
 		log.Fatalf("Failed to attach uprobe/malloc_enter: %v", err)
 	}
+	log.Printf("Successfully linked tracepoint uprobe/malloc_enter")
 	p.links = append(p.links, mallocEnterLink)
 
 	mallocExitLink, err := executable.Uretprobe("malloc", p.bpfObjects.MallocExit, &link.UprobeOptions{
 		PID: pid,
 	})
-	
+
 	if err != nil {
 		log.Fatalf("Failed to attach uprobe/malloc_exit: %v", err)
 	}
-
+	log.Printf("Successfully linked tracepoint uprobe/malloc_exit")
 	p.links = append(p.links, mallocExitLink)
-	
+
 	freeEnterLink, err := executable.Uprobe("free", p.bpfObjects.FreeEnter, &link.UprobeOptions{
 		PID: pid,
 	})
-	
+
 	if err != nil {
 		log.Fatalf("Failed to attach uprobe/free_enter uprobe: %v", err)
 	}
-
+	log.Printf("Successfully linked tracepoint uprobe/free_enter")
 	p.links = append(p.links, freeEnterLink)
-	
+
 	callocEnterLink, err := executable.Uprobe("calloc", p.bpfObjects.CallocEnter, &link.UprobeOptions{
 		PID: pid,
 	})
-	
+
 	if err != nil {
 		log.Fatalf("Failed to attach uprobe/calloc_enter: %v", err)
 	}
-
+	log.Printf("Successfully linked tracepoint uprobe/calloc_enter")
 	p.links = append(p.links, callocEnterLink)
-	
+
 	callocExitLink, err := executable.Uretprobe("calloc", p.bpfObjects.CallocExit, &link.UprobeOptions{
 		PID: pid,
 	})
-	
+
 	if err != nil {
 		log.Fatalf("Failed to attach uprobe/calloc_exit: %v", err)
 	}
-
+	log.Printf("Successfully linked tracepoint uprobe/calloc_exit")
 	p.links = append(p.links, callocExitLink)
 
 	reallocEnterLink, err := executable.Uprobe("realloc", p.bpfObjects.ReallocEnter, &link.UprobeOptions{
 		PID: pid,
 	})
-	
+
 	if err != nil {
 		log.Fatalf("Failed to attach uprobe/realloc_enter: %v", err)
 	}
-
+	log.Printf("Successfully linked tracepoint uprobe/realloc_enter")
 	p.links = append(p.links, reallocEnterLink)
-	
+
 	reallocExitLink, err := executable.Uretprobe("realloc", p.bpfObjects.ReallocExit, &link.UprobeOptions{
 		PID: pid,
 	})
-	
+
 	if err != nil {
 		log.Fatalf("Failed to attach uprobe/realloc_exit: %v", err)
-	}	
-
+	}
+	log.Printf("Successfully linked tracepoint uprobe/realloc_exit")
 	p.links = append(p.links, reallocExitLink)
+
+	memleakKmallocLink, err := link.Tracepoint("kmem", "kmalloc", p.bpfObjects.MemleakKmalloc, nil)
+	if err != nil {
+		log.Printf("Failed to link tracepoint tracepoint/kmem/kmalloc %v", err)
+		return err
+	}
+	log.Printf("Successfully linked tracepoint tracepoint/kmem/kmalloc")
+	p.links = append(p.links, memleakKmallocLink)
+
+	memleakKfreeLink, err := link.Tracepoint("kmem", "kfree", p.bpfObjects.MemleakKfree, nil)
+	if err != nil {
+		log.Printf("Failed to link tracepoint tracepoint/kmem/kfree %v", err)
+		return err
+	}
+	log.Printf("Successfully linked tracepoint tracepoint/kmem/kfree")
+	p.links = append(p.links, memleakKfreeLink)
 
 	return nil
 }
@@ -245,6 +304,56 @@ func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize 
 		log.Printf("Failed creating new probe: %v", err)
 		return err
 	}
+	allocsMap := probe.bpfObjects.probeMaps.Allocs
+	defer allocsMap.Close()
+
+	combinedAllocsMap := probe.bpfObjects.probeMaps.CombinedAllocs
+	defer combinedAllocsMap.Close()
+
+	go func() {
+		for {
+			fmt.Println("=== Reading combined allocs map entries ===")
+			iter := combinedAllocsMap.Iterate()
+
+			var key uint64
+			var val info.CombinedAllocInfoRaw
+
+			for iter.Next(&key, &val) {
+				combinedInfo, err := info.GetCombinedAllocInfo(val)
+				if err != nil {
+					log.Printf("Failed to unmarshal combined alloc info: %v", err)
+					continue
+				}
+				fmt.Printf("stackId=%-16x total_size=%d number_of_allocs=%d\n", key, combinedInfo.TotalSize, combinedInfo.NumberOfAllocs)
+			}
+			if err := iter.Err(); err != nil {
+				log.Printf("Iterator error: %v", err)
+			}
+
+			fmt.Println("===========================")
+			time.Sleep(10 * time.Second)
+		}
+	}()
+	// go func() {
+	// 	for {
+	// 		fmt.Println("=== Reading allocs map entries ===")
+	// 		iter := allocsMap.Iterate()
+
+	// 		var key uint64
+	// 		var val info.AllocInfo
+
+	// 		for iter.Next(&key, &val) {
+	// 			fmt.Printf("address=%-32x size=%d\n", key, val.Size)
+	// 		}
+	// 		if err := iter.Err(); err != nil {
+	// 			log.Printf("Iterator error: %v", err)
+	// 		}
+
+	// 		fmt.Println("===========================")
+	// 		time.Sleep(10 * time.Second)
+	// 	}
+	// }()
+
 	<-ctx.Done()
 	return probe.Close()
 }
