@@ -8,6 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"golang.org/x/sys/unix"
+
 	"ebpf-memleak/internal/probe"
 )
 
@@ -18,7 +20,7 @@ var (
 	pageSize      = flag.Uint64("page-size", 4096, "Page size")
 	sampleRate    = flag.Uint64("sample-rate", 1, "Sample rate for tracing")
 	traceAll      = flag.Bool("trace-all", false, "Trace all allocations")
-	stackFlags    = flag.Uint64("stack-flags", 0, "Stack flags for stack capture")
+	kernelTrace   = flag.Bool("kernel-trace", false, "Enable kernel tracing")
 	waMissingFree = flag.Bool("wa-missing-free", false, "Workaround for missing free")
 	nTopStacks    = flag.Int("n-top-stacks", 3, "Number of top stacks to display")
 )
@@ -46,8 +48,15 @@ func main() {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 
+	var stackFlag uint64
+	if *kernelTrace {
+		stackFlag = 0
+	} else {
+		stackFlag = uint64(unix.BPF_F_USER_STACK)
+	}
+	log.Printf("Starting memleak tracer for PID %d", stackFlag)
 	signalHandler(cancel)
-	if err := probe.Run(ctx, *pid, *minSize, *maxSize, *pageSize, *sampleRate, *traceAll, *stackFlags, *waMissingFree, *nTopStacks); err != nil {
+	if err := probe.Run(ctx, *pid, *minSize, *maxSize, *pageSize, *sampleRate, *traceAll, stackFlag, *waMissingFree, *nTopStacks); err != nil {
 		log.Fatalf("Failed running the probe: %v", err)
 	}
 }
