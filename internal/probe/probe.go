@@ -10,12 +10,14 @@ import (
 	"strings"
 	"time"
 
-	// "github.com/cilium/ebpf"
+	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 	"golang.org/x/sys/unix"
 
 	"ebpf-memleak/internal/info"
+	"ebpf-memleak/internal/symbolizer"
+
 )
 
 //go:generate env GOPACKAGE=probe go run github.com/cilium/ebpf/cmd/bpf2go probe ../../bpf/memleak.bpf.c -- -O2 -target x86_64-unknown-linux-gnu -D__TARGET_ARCH_x86
@@ -23,8 +25,10 @@ import (
 const tenMegaBytes = 1024 * 1024 * 10
 const twentyMegaBytes = tenMegaBytes * 2
 const fortyMegaBytes = twentyMegaBytes * 2
+const maxStackDepth = 127
 
 type MinHeap []*info.CombinedAllocInfo
+type StackTrace [maxStackDepth]uint64
 
 func (h MinHeap) Len() int           { return len(h) }
 func (h MinHeap) Less(i, j int) bool { return h[i].TotalSize < h[j].TotalSize } // min-heap
@@ -317,6 +321,42 @@ func (p *probe) Close() error {
 	return nil
 }
 
+func getStackTrace(stackId uint32, stackTracesMap *ebpf.Map, pid int) ([]string, error) {
+	var stackTrace StackTrace
+	err := stackTracesMap.Lookup(stackId, &stackTrace)
+	if err != nil {
+		return nil, err
+	}
+
+	mapsFile := fmt.Sprintf("/proc/%d/maps", pid)
+	symResolver, err := symbolizer.NewSymbolResolver(mapsFile)
+	
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := os.Open(mapsFile)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	frames := []string{}
+	for _, pc := range stackTrace {
+		if pc == 0 {
+			continue
+		}
+		sym, err := symResolver.Resolve(pc)
+		if err != nil {
+			log.Printf("Failed to resolve symbol for pc=0x%x: %v", pc, err)
+			frames = append(frames, fmt.Sprintf("0x%x [unknown]", pc))
+		} else {
+			frames = append(frames, fmt.Sprintf("0x%x %s", pc, sym))
+		}
+	}
+	return frames, nil
+}
+
 func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize uint64, sampleRate uint64, traceAll bool, stackFlags uint64, waMissingFree bool, nTopStacks int) error {
 	probe, err := newProbe(pid, minSize, maxSize, pageSize, sampleRate, traceAll, stackFlags, waMissingFree)
 	if err != nil {
@@ -332,16 +372,14 @@ func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize 
 	go func() {
 		for {
 			fmt.Println("=== Reading combined allocs map entries ===")
-			iter := combinedAllocsMap.Iterate()
 
+			combinedAllocsMapIter := combinedAllocsMap.Iterate()
 			h := &MinHeap{}
 			heap.Init(h)
-
-			var key uint64
-			var val info.CombinedAllocInfoRaw
-
-			for iter.Next(&key, &val) {
-				combinedInfo, err := info.GetCombinedAllocInfo(val)
+			var combinedAllocKey uint64
+			var combinedAllocVal info.CombinedAllocInfoRaw
+			for combinedAllocsMapIter.Next(&combinedAllocKey, &combinedAllocVal) {
+				combinedInfo, err := info.GetCombinedAllocInfo(uint32(combinedAllocKey), combinedAllocVal)
 				if err != nil {
 					log.Printf("Failed to unmarshal combined alloc info: %v", err)
 					continue
@@ -353,21 +391,44 @@ func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize 
 					heap.Push(h, combinedInfo)
 				}
 			}
-
-			topStacks := make([]*info.CombinedAllocInfo, h.Len())
-			for i := len(topStacks) - 1; i >= 0; i-- {
-				topStacks[i] = heap.Pop(h).(*info.CombinedAllocInfo)
-			}
-
-			fmt.Printf("[%s] Top %d stacks with outstanding allocations:\n", time.Now().Format(time.RFC3339), len(topStacks))
-			for _, stackInfo := range topStacks {
-				fmt.Printf("%d Bytes in %d allocations from stack\n", stackInfo.TotalSize, stackInfo.NumberOfAllocs)
-			}
-
-			if err := iter.Err(); err != nil {
+			if err := combinedAllocsMapIter.Err(); err != nil {
 				log.Printf("Iterator error: %v", err)
 			}
 
+			topStacks := make([]*info.CombinedAllocInfo, h.Len())
+			allocs := make(map[uint32][]info.AllocInfo)
+			for i := len(topStacks) - 1; i >= 0; i-- {
+				topStacks[i] = heap.Pop(h).(*info.CombinedAllocInfo)
+				allocs[topStacks[i].StackId] = []info.AllocInfo{}
+			}
+
+			allocsIter := allocsMap.Iterate()
+			var allocKey uint64
+			var allocRawVal info.AllocInfoRaw
+			for allocsIter.Next(&allocKey, &allocRawVal) {
+				if allocs[allocRawVal.StackId] != nil {
+					allocs[allocRawVal.StackId] = append(allocs[allocRawVal.StackId], info.GetAllocInfo(allocKey, allocRawVal))
+				}
+			}
+
+			fmt.Printf("[%s] Top %d stacks with outstanding allocations:\n", time.Now().Format(time.RFC3339), len(topStacks))
+			if err != nil {
+				log.Printf("Failed to create symbol resolver: %v", err)
+				continue
+			}
+
+			for _, stackInfo := range topStacks {
+				fmt.Printf("%d Bytes in %d allocations from stack\n", stackInfo.TotalSize, stackInfo.NumberOfAllocs)
+				stackFrames, err := getStackTrace(stackInfo.StackId, probe.bpfObjects.probeMaps.StackTraces, pid)
+				if err != nil {
+					log.Printf("Failed to get stack trace for stack id %d: %v", stackInfo.StackId, err)
+					continue
+				}
+				for _, frame := range stackFrames {
+					fmt.Printf("    %s\n", frame)
+				}
+				
+			}
 			fmt.Println("===========================")
 			time.Sleep(10 * time.Second)
 		}
