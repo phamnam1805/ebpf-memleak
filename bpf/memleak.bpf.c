@@ -48,12 +48,6 @@ struct
     __uint(max_entries, 10240);
 } memptrs SEC(".maps");
 
-// struct
-// {
-//     __uint(type, BPF_MAP_TYPE_STACK_TRACE);
-//     __type(key, u32);
-// } stack_traces SEC(".maps");
-
 struct {
     __uint(type, BPF_MAP_TYPE_STACK_TRACE);
     __uint(max_entries, 10240);
