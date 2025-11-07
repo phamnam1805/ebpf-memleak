@@ -123,6 +123,7 @@ type probeVariableSpecs struct {
 	PageSize      *ebpf.VariableSpec `ebpf:"page_size"`
 	SampleRate    *ebpf.VariableSpec `ebpf:"sample_rate"`
 	StackFlags    *ebpf.VariableSpec `ebpf:"stack_flags"`
+	TargetPid     *ebpf.VariableSpec `ebpf:"target_pid"`
 	TraceAll      *ebpf.VariableSpec `ebpf:"trace_all"`
 	WaMissingFree *ebpf.VariableSpec `ebpf:"wa_missing_free"`
 }
@@ -173,6 +174,7 @@ type probeVariables struct {
 	PageSize      *ebpf.Variable `ebpf:"page_size"`
 	SampleRate    *ebpf.Variable `ebpf:"sample_rate"`
 	StackFlags    *ebpf.Variable `ebpf:"stack_flags"`
+	TargetPid     *ebpf.Variable `ebpf:"target_pid"`
 	TraceAll      *ebpf.Variable `ebpf:"trace_all"`
 	WaMissingFree *ebpf.Variable `ebpf:"wa_missing_free"`
 }

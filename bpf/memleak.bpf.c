@@ -11,10 +11,11 @@
 const volatile size_t min_size = 0;
 const volatile size_t max_size = -1;
 const volatile size_t page_size = 4096;
-const volatile __u64 sample_rate = 1;
+const volatile __u64 sample_rate = 0;
 const volatile bool trace_all = false;
 const volatile __u64 stack_flags = 0;
 const volatile bool wa_missing_free = false;
+const volatile pid_t target_pid = 0;
 
 struct
 {
@@ -105,6 +106,8 @@ static int gen_alloc_enter(size_t size)
     }
 
     const pid_t pid = bpf_get_current_pid_tgid() >> 32;
+    if (target_pid && pid != target_pid)
+        return 0;
     bpf_map_update_elem(&sizes, &pid, &size, BPF_ANY);
 
     if (trace_all)

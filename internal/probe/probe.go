@@ -73,7 +73,7 @@ func newProbe(pid int, minSize uint64, maxSize uint64, pageSize uint64, sampleRa
 
 	prbe := probe{}
 
-	if err := prbe.loadObjects(minSize, maxSize, pageSize, sampleRate, traceAll, stackFlags, waMissingFree); err != nil {
+	if err := prbe.loadObjects(pid, minSize, maxSize, pageSize, sampleRate, traceAll, stackFlags, waMissingFree); err != nil {
 		log.Printf("Failed loading probe objects: %v", err)
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func newProbe(pid int, minSize uint64, maxSize uint64, pageSize uint64, sampleRa
 	return &prbe, nil
 }
 
-func (p *probe) loadObjects(minSize uint64, maxSize uint64, pageSize uint64, sampleRate uint64, traceAll bool, stackFlags uint64, waMissingFree bool) error {
+func (p *probe) loadObjects(pid int, minSize uint64, maxSize uint64, pageSize uint64, sampleRate uint64, traceAll bool, stackFlags uint64, waMissingFree bool) error {
 	log.Printf("Loading probe object into kernel")
 
 	objs := probeObjects{}
@@ -94,6 +94,15 @@ func (p *probe) loadObjects(minSize uint64, maxSize uint64, pageSize uint64, sam
 	spec, err := loadProbe()
 	if err != nil {
 		return err
+	}
+
+	if pid > 0 {
+		if err := spec.Variables["target_pid"].Set(int32(pid)); err != nil {
+			log.Printf("Failed setting target_pid: %v", err)
+			return err
+		}
+
+		log.Printf("Set target_pid to %d", pid)
 	}
 
 	if minSize > 0 {
@@ -346,9 +355,10 @@ func getStackTrace(stackId uint32, stackTracesMap *ebpf.Map, pid int) ([]string,
 		if pc == 0 {
 			continue
 		}
+		// fmt.Printf("Resolving pc=0x%x\n", pc)
 		sym, err := symResolver.Resolve(pc)
 		if err != nil {
-			log.Printf("Failed to resolve symbol for pc=0x%x: %v", pc, err)
+			// log.Printf("Failed to resolve symbol for pc=0x%x: %v", pc, err)
 			frames = append(frames, fmt.Sprintf("0x%x [unknown]", pc))
 		} else {
 			frames = append(frames, fmt.Sprintf("0x%x %s", pc, sym))
@@ -384,12 +394,14 @@ func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize 
 					log.Printf("Failed to unmarshal combined alloc info: %v", err)
 					continue
 				}
-				if h.Len() < nTopStacks {
-					heap.Push(h, combinedInfo)
-				} else if combinedInfo.TotalSize > (*h)[0].TotalSize {
-					heap.Pop(h)
-					heap.Push(h, combinedInfo)
-				}
+				if combinedInfo.TotalSize > 0 {
+					if h.Len() < nTopStacks {
+						heap.Push(h, combinedInfo)
+					} else if combinedInfo.TotalSize > (*h)[0].TotalSize {
+						heap.Pop(h)
+						heap.Push(h, combinedInfo)
+					}
+				}	
 			}
 			if err := combinedAllocsMapIter.Err(); err != nil {
 				log.Printf("Iterator error: %v", err)
@@ -430,28 +442,9 @@ func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize 
 				
 			}
 			fmt.Println("===========================")
-			time.Sleep(10 * time.Second)
+			time.Sleep(1 * time.Second)
 		}
 	}()
-	// go func() {
-	// 	for {
-	// 		fmt.Println("=== Reading allocs map entries ===")
-	// 		iter := allocsMap.Iterate()
-
-	// 		var key uint64
-	// 		var val info.AllocInfo
-
-	// 		for iter.Next(&key, &val) {
-	// 			fmt.Printf("address=%-32x size=%d\n", key, val.Size)
-	// 		}
-	// 		if err := iter.Err(); err != nil {
-	// 			log.Printf("Iterator error: %v", err)
-	// 		}
-
-	// 		fmt.Println("===========================")
-	// 		time.Sleep(10 * time.Second)
-	// 	}
-	// }()
 
 	<-ctx.Done()
 	return probe.Close()

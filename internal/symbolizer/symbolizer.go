@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"debug/elf"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strconv"
@@ -111,7 +110,7 @@ func NewSymbolResolver(mapsFile string) (*SymbolResolver, error) {
 				symbols: symbols,
 			}
 			resolver.mappings = append(resolver.mappings, procMapEntry)
-			log.Printf("Loaded %d symbols from %s", len(symbols), path)
+			// log.Printf("Loaded %d symbols from %s", len(symbols), path)
 		}
 	}
 
@@ -130,7 +129,7 @@ func demangleSymbol(sym string) string {
 func (r *SymbolResolver) Resolve(pc uint64) (string, error) {
 	for _, m := range r.mappings {
 		// Adjust pc to file offset
-		println(m.start, m.end, pc)
+		// println(m.start, m.end, pc)
 		if pc >= m.start && pc < m.end {
 			// Find the closest symbol
 			fileOffset := pc - m.start + m.offset

@@ -23,7 +23,7 @@ int main() {
     printf("This program intentionally leaks memory for testing memleak\n");
 
     // Wait a bit for memleak to attach
-    sleep(2);
+    sleep(5);
 
     // Create various leaks
     leak_small();
