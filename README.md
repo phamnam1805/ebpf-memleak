@@ -100,7 +100,7 @@ sudo ./ebpf-memleak -pid 1234
 sudo ./ebpf-memleak -pid 1234 -min-size 1024 -max-size 1048576
 
 # Enable all allocation tracing with kernel tracing
-sudo ./ebpf-memleak -pid 1234 -trace-all -stack-flags 0
+sudo ./ebpf-memleak -pid 1234 -trace-all 
 
 # Monitor with sampling (every 10th allocation)
 sudo ./ebpf-memleak -pid 1234 -sample-rate 10
@@ -116,10 +116,7 @@ The following flags are supported:
 - `-page-size`: Page size for memory calculations (default: 4096)
 - `-sample-rate`: Sample every Nth allocation (default: 1, trace all)
 - `-trace-all`: Enable verbose tracing of all allocations (boolean)
-- `-stack-flags`: Stack capture flags (default: 0 for kernel stacks)
 - `-wa-missing-free`: Workaround for missing free events (boolean)
-
-**Note**: The `-pid` parameter is mandatory and must be greater than 0.
 
 ## Output Format
 
