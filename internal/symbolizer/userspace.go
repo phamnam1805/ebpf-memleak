@@ -62,7 +62,7 @@ func loadSymbols(path string) (map[uint64]string, error) {
 	return symbols, nil
 }
 
-func NewSymbolResolver(mapsFile string) (*SymbolResolver, error) {
+func NewUserspaceSymbolResolver(mapsFile string) (*SymbolResolver, error) {
 	f, err := os.Open(mapsFile)
 	if err != nil {
 		return nil, err
@@ -144,7 +144,22 @@ func (r *SymbolResolver) Resolve(pc uint64) (string, error) {
 			if closestSym != "" {
 				// Demangle the symbol
 				demangledSym := demangleSymbol(closestSym)
-				return fmt.Sprintf("%s (%s)", demangledSym, m.path), nil
+				// return fmt.Sprintf("%s (%s)", demangledSym, m.path), nil
+
+				cmd := exec.Command("addr2line", "-e", m.path, fmt.Sprintf("0x%x", fileOffset))
+				output, err := cmd.Output()
+				var fileLine string
+				if err == nil {
+					fileLine = strings.TrimSpace(string(output))
+				} else {
+					fileLine = "??:?"
+				}
+
+				if fileLine == "??:?" {
+					fileLine = m.path
+				}
+
+				return fmt.Sprintf("%s (%s)", demangledSym, fileLine), nil
 			}
 		}
 	}

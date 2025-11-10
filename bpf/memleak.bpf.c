@@ -106,8 +106,10 @@ static int gen_alloc_enter(size_t size)
     }
 
     const pid_t pid = bpf_get_current_pid_tgid() >> 32;
+    const u64 tid = bpf_get_current_pid_tgid();
     if (target_pid && pid != target_pid)
         return 0;
+    bpf_printk("alloc entered: pid=%u tid=%u", pid, tid);
     bpf_map_update_elem(&sizes, &pid, &size, BPF_ANY);
 
     if (trace_all)
@@ -126,7 +128,6 @@ static int gen_alloc_exit2(void *ctx, u64 address)
         return 0; // missed alloc entry
 
     __builtin_memset(&info, 0, sizeof(info));
-
     info.size = *size;
     bpf_map_delete_elem(&sizes, &pid);
 
@@ -178,12 +179,14 @@ static int gen_free_enter(const void *address)
 SEC("uprobe")
 int BPF_KPROBE(malloc_enter, size_t size)
 {
+    bpf_printk("malloc entered, size=%lu\n", size);
     return gen_alloc_enter(size);
 }
 
 SEC("uretprobe")
 int BPF_KRETPROBE(malloc_exit)
 {
+    bpf_printk("malloc exited");
     return gen_alloc_exit(ctx);
 }
 
