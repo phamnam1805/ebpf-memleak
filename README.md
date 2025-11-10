@@ -223,18 +223,6 @@ void leak_small() {
 - **Leak Detection**: Memory allocated but never freed shows up as "outstanding allocations"
 - **Symbol Resolution**: Function names like `leak_with_loop+0x12` show the exact location in your code
 
-**Report Structure:**
-- **Timestamp**: When the report was generated
-- **Stack-based grouping**: Allocations grouped by their stack trace
-- **Memory statistics**: Total bytes and number of allocations per stack
-- **Stack trace**: Function addresses with symbols (when available)
-
-**Fields Explanation:**
-- `10240 Bytes in 5 allocations`: Total leaked memory and allocation count from this code path
-- `leak_with_loop+0x12`: Function name + offset where allocation occurred
-- `/tmp/test_memleak`: Binary that contains the leaking function
-- `__libc_start_main`: Standard C library startup functions
-
 **Memory Leak Indicators:**
 - **Outstanding allocations**: Memory that was allocated but never freed
 - **Growing totals**: Numbers increase over time for active leaks
