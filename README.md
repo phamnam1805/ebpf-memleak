@@ -240,18 +240,6 @@ void leak_small() {
 - **Growing totals**: Numbers increase over time for active leaks
 - **Stack traces**: Show exact location where leaks originate
 
-**Real-world Usage:**
-```bash
-# Monitor with size filters (only large allocations)
-sudo ./ebpf-memleak -pid $PID -min-size 4096
-
-# Monitor with sampling to reduce overhead
-sudo ./ebpf-memleak -pid $PID -sample-rate 10
-
-# Enable verbose tracing for debugging
-sudo ./ebpf-memleak -pid $PID -trace-all
-```
-
 ## How It Works
 
 ### Kernel-Side (eBPF)
