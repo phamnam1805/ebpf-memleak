@@ -126,6 +126,7 @@ func demangleSymbol(sym string) string {
 	return strings.TrimSpace(string(output))
 }
 
+
 func (r *SymbolResolver) Resolve(pc uint64) (string, error) {
 	for _, m := range r.mappings {
 		// Adjust pc to file offset
