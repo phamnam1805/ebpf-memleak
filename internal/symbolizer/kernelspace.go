@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"log"
 )
 
 func LoadKernelSymbolsFromKallsyms() (map[uint64]string, error) {
