@@ -2,9 +2,12 @@ package symbolizer
 
 import (
 	"bufio"
+	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"log"
 )
 
 func LoadKernelSymbolsFromKallsyms() (map[uint64]string, error) {
@@ -65,4 +68,72 @@ func NewKernelResolverFromVmlinux(vmlinuxPath string) (*SymbolResolver, error) {
 		symbols: syms,
 	}
 	return &SymbolResolver{mappings: []ProcMapEntry{entry}}, nil
+}
+
+// KernelSymbolResolver resolves kernel symbols using kallsyms and optionally vmlinux for debug info
+type KernelSymbolResolver struct {
+	kallsyms    map[uint64]string
+	vmlinuxPath string
+}
+
+// NewKernelSymbolResolver creates a resolver that uses kallsyms (always) and vmlinux (if available)
+func NewKernelSymbolResolver(vmlinuxPath string) (*KernelSymbolResolver, error) {
+	// Load kallsyms (always available and accurate for runtime addresses)
+	kallsyms, err := LoadKernelSymbolsFromKallsyms()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load kallsyms: %w", err)
+	}
+
+	// Check if vmlinux exists (optional, for debug info)
+	if vmlinuxPath != "" {
+		if _, err := os.Stat(vmlinuxPath); err != nil {
+			vmlinuxPath = "" // Disable vmlinux if not found
+		}
+	}
+
+	return &KernelSymbolResolver{
+		kallsyms:    kallsyms,
+		vmlinuxPath: vmlinuxPath,
+	}, nil
+}
+
+// Resolve resolves a kernel address to symbol name and optionally source location
+func (r *KernelSymbolResolver) Resolve(addr uint64) (string, error) {
+	// Find the closest symbol from kallsyms
+	var closestAddr uint64
+	var closestSym string
+
+	for symAddr, symName := range r.kallsyms {
+		if symAddr <= addr && symAddr > closestAddr {
+			closestAddr = symAddr
+			closestSym = symName
+		}
+	}
+
+	if closestSym == "" {
+		return "", fmt.Errorf("symbol not found for address 0x%x", addr)
+	}
+
+	// If we have vmlinux, try to get source file:line info
+	if r.vmlinuxPath != "" {
+		// For kernel, addresses in kallsyms are already runtime addresses
+		// We can use addr2line directly (no KASLR adjustment needed if using runtime addr)
+		cmd := exec.Command("addr2line", "-e", r.vmlinuxPath, fmt.Sprintf("0x%x", addr))
+		output, err := cmd.Output()
+		if err == nil {
+			fileLine := strings.TrimSpace(string(output))
+			// log.Printf("addr2line output for 0x%x: %s", addr, fileLine)
+			if fileLine != "??:?" && fileLine != "??:0" && fileLine != "" {
+				return fmt.Sprintf("%s (%s)", closestSym, fileLine), nil
+			}
+		}
+	}
+
+	// Fallback to just symbol name
+	if addr != closestAddr {
+		// Show offset if not exact match
+		offset := addr - closestAddr
+		return fmt.Sprintf("%s+0x%x", closestSym, offset), nil
+	}
+	return closestSym, nil
 }

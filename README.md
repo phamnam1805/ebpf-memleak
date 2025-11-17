@@ -11,16 +11,18 @@ Collected/visible data includes:
 - Aggregated statistics by stack trace (total size, number of allocations)
 - Support for both userspace (libc) and kernel memory tracing
 - Configurable filters for allocation size, sample rate, and process targeting
-
-**Note**: The current implementation does not resolve kernel stack traces to human-readable symbols. Stack trace IDs are provided but symbol resolution is not implemented.
+- Stack trace symbolization for both userspace and kernel allocations
 
 ## Key Features
 
 - **Userspace Language**: Go instead of C
 - **BPF Library**: [cilium/ebpf](https://github.com/cilium/ebpf) instead of libbpf
-- **Attach Types**: 
+- **Attach Types**:
   - uprobes/uretprobes on libc memory functions
   - Kernel tracepoints for kmalloc/kfree operations
+- **Symbol Resolution**:
+  - Userspace: ELF symbol parsing with addr2line for source locations
+  - Kernel: `/proc/kallsyms` with optional vmlinux debug symbols support
 - **Code Generation**: Uses `bpf2go` for generating Go bindings from eBPF C code
 - **Modern API**: Leverages Go's type safety and error handling
 - **Real-time Monitoring**: Continuous reporting of allocation statistics
@@ -45,7 +47,8 @@ ebpf-memleak/
 │   ├── info/
 │   │   └── info.go        # data structures and unmarshaling
 │   ├── symbolizer/
-│   │   └── userspace.go   # stack trace symbolization (userspace)
+│   │   ├── userspace.go   # stack trace symbolization (userspace)
+│   │   └── kernelspace.go # stack trace symbolization (kernel)
 │   └── timer/
 │       └── timer.go       # timing utilities
 ├── scripts/
@@ -264,10 +267,10 @@ The userspace component uses a min-heap data structure for efficient top-N alloc
 
 ## Limitations
 
-- **Stack Trace Resolution**: Kernel stack traces are captured as IDs but not resolved to human-readable symbols
-- **Symbol Resolution**: Userspace stack trace symbolization is limited
+- **Kernel Symbol Resolution**: Uses `/proc/kallsyms` for symbol names. Optional vmlinux debug symbols (if installed) can provide source file:line information
 - **Performance Impact**: Tracing all allocations can impact performance; use sampling for production
 - **libc Dependency**: Target processes must use standard libc memory functions
+- **Security**: Requires root privileges or CAP_BPF + CAP_PERFMON capabilities
 
 ## Troubleshooting
 

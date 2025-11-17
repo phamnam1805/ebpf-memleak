@@ -5,7 +5,7 @@ build-ebpf-memleak:
 	go build -ldflags "-s -w" -o ebpf-memleak cmd/main.go
 
 build-test-memleak:
-	gcc -g -o bpf/test_memleak bpf/test_memleak.c
+	gcc -g -O0 -o bpf/test_memleak bpf/test_memleak.c
 
 build: generate build-ebpf-memleak
 

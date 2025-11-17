@@ -129,25 +129,32 @@ func demangleSymbol(sym string) string {
 
 func (r *SymbolResolver) Resolve(pc uint64) (string, error) {
 	for _, m := range r.mappings {
-		// Adjust pc to file offset
-		// println(m.start, m.end, pc)
 		if pc >= m.start && pc < m.end {
-			// Find the closest symbol
-			fileOffset := pc - m.start + m.offset
+			// Calculate the offset within the mapped region
+			// For PIE/shared libraries: virtual_addr = (runtime_addr - load_base) + segment_offset
+			virtualAddr := pc - m.start + m.offset
+
+			// Find the closest symbol whose address is <= virtualAddr
 			var closestAddr uint64
 			var closestSym string
 			for addr, sym := range m.symbols {
-				if addr <= fileOffset && addr >= closestAddr {
+				// Symbol addresses (sym.Value) are virtual addresses in the ELF file
+				if addr <= virtualAddr && addr > closestAddr {
 					closestAddr = addr
 					closestSym = sym
 				}
 			}
-			if closestSym != "" {
-				// Demangle the symbol
-				demangledSym := demangleSymbol(closestSym)
-				// return fmt.Sprintf("%s (%s)", demangledSym, m.path), nil
 
-				cmd := exec.Command("addr2line", "-e", m.path, fmt.Sprintf("0x%x", fileOffset))
+			if closestSym != "" {
+				// Demangle the symbol (for C++ symbols)
+				demangledSym := demangleSymbol(closestSym)
+
+				// Use addr2line to get source file and line number
+				// addr2line expects virtual address from the ELF file
+				// Subtract 1 from PC to get the call site instead of return address
+				// This ensures addr2line reports the correct line where the function was called
+				adjustedAddr := virtualAddr - 1
+				cmd := exec.Command("addr2line", "-e", m.path, fmt.Sprintf("0x%x", adjustedAddr))
 				output, err := cmd.Output()
 				var fileLine string
 				if err == nil {
@@ -156,7 +163,8 @@ func (r *SymbolResolver) Resolve(pc uint64) (string, error) {
 					fileLine = "??:?"
 				}
 
-				if fileLine == "??:?" {
+				// If addr2line couldn't resolve, fall back to binary path
+				if fileLine == "??:?" || fileLine == "" {
 					fileLine = m.path
 				}
 

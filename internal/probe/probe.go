@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"os/exec"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -311,6 +312,14 @@ func (p *probe) attachPrograms(pid int) error {
 		log.Printf("Successfully linked tracepoint tracepoint/kmem/kmalloc")
 		p.links = append(p.links, memleakKmallocLink)
 
+		// memleakKmallocNodeLink, err := link.Tracepoint("kmem", "kmalloc_node", p.bpfObjects.MemleakKmallocNode, nil)
+		// if err != nil {
+		// 	log.Printf("Failed to link tracepoint tracepoint/kmem/kmalloc_node %v", err)
+		// 	return err
+		// }
+		// log.Printf("Successfully linked tracepoint tracepoint/kmem/kmalloc_node")
+		// p.links = append(p.links, memleakKmallocNodeLink)
+
 		memleakKfreeLink, err := link.Tracepoint("kmem", "kfree", p.bpfObjects.MemleakKfree, nil)
 		if err != nil {
 			log.Printf("Failed to link tracepoint tracepoint/kmem/kfree %v", err)
@@ -334,6 +343,62 @@ func (p *probe) Close() error {
 		}
 	}
 	return nil
+}
+
+func findVmlinux() string {
+      // Get kernel version
+      cmd := exec.Command("uname", "-r")
+      output, err := cmd.Output()
+      if err != nil {
+          return ""
+      }
+      kernelVersion := strings.TrimSpace(string(output))
+
+      // Common paths to check
+      paths := []string{
+          "/usr/lib/debug/boot/vmlinux-" + kernelVersion,
+          "/usr/lib/debug/lib/modules/" + kernelVersion + "/vmlinux",
+          "/lib/modules/" + kernelVersion + "/build/vmlinux",
+          "/boot/vmlinux-" + kernelVersion,
+      }
+
+      for _, path := range paths {
+          if _, err := os.Stat(path); err == nil {
+				// log.Printf("Found vmlinux at: %s", path)
+              	return path
+          }
+      }
+
+      return "" // Not found, will use kallsyms only
+}
+
+func getKernelspaceStackTrace(stackId uint32, stackTracesMap *ebpf.Map)([]string, error) {
+	var stackTrace StackTrace
+	err := stackTracesMap.Lookup(stackId, &stackTrace)
+	if err != nil {
+		return nil, err
+	}
+
+	symResolver, err := symbolizer.NewKernelSymbolResolver(findVmlinux())
+	if err != nil {
+		return nil, err
+	}
+
+	frames := []string{}
+	for _, pc := range stackTrace {
+		if pc == 0 {
+			continue
+		}
+		sym, err := symResolver.Resolve(pc)
+		if err != nil {
+			// log.Printf("Failed to resolve symbol for pc=0x%x: %v", pc, err)
+			frames = append(frames, fmt.Sprintf("0x%x [unknown]", pc))
+		} else {
+			frames = append(frames, fmt.Sprintf("0x%x %s", pc, sym))
+		}
+	}
+	return frames, nil
+
 }
 
 func getUserspaceStackTrace(stackId uint32, stackTracesMap *ebpf.Map, pid int) ([]string, error) {
@@ -361,7 +426,6 @@ func getUserspaceStackTrace(stackId uint32, stackTracesMap *ebpf.Map, pid int) (
 		if pc == 0 {
 			continue
 		}
-		// fmt.Printf("Resolving pc=0x%x\n", pc)
 		sym, err := symResolver.Resolve(pc)
 		if err != nil {
 			// log.Printf("Failed to resolve symbol for pc=0x%x: %v", pc, err)
@@ -395,7 +459,11 @@ func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize 
 	combinedAllocsMap := probe.bpfObjects.probeMaps.CombinedAllocs
 	defer combinedAllocsMap.Close()
 
+	// Channel to signal when process exits
+	processDone := make(chan struct{})
+
 	go func() {
+		defer close(processDone)
 		for (pid > 0 && isProcessAlive(pid)) || pid == 0 {
 			fmt.Println("=== Reading combined allocs map entries ===")
 
@@ -457,14 +525,31 @@ func Run(ctx context.Context, pid int, minSize uint64, maxSize uint64, pageSize 
 						fmt.Printf("    %s\n", frame)
 					}
 				} else {
-					fmt.Printf("Not yet supported")
+					stackFrames, err := getKernelspaceStackTrace(stackInfo.StackId, probe.bpfObjects.probeMaps.StackTraces)
+					if err != nil {
+						log.Printf("Failed to get stack trace for stack id %d: %v", stackInfo.StackId, err)
+						continue
+					}
+					for _, frame := range stackFrames {
+						fmt.Printf("    %s\n", frame)
+					}
 				}
 			}
 			fmt.Println("===========================")
 			time.Sleep(5 * time.Second)
 		}
+		if pid > 0 {
+			log.Printf("Process %d has exited, stopping memleak", pid)
+		}
 	}()
 
-	<-ctx.Done()
+	// Wait for either context cancellation or process exit
+	select {
+		case <-ctx.Done():
+			log.Println("Context cancelled, shutting down")
+		case <-processDone:
+			log.Println("Process monitoring complete")
+	}
+
 	return probe.Close()
 }
